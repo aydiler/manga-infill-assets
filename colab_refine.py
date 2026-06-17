@@ -22,8 +22,11 @@ BASE = "https://raw.githubusercontent.com/aydiler/manga-infill-assets/master/"
 SCENES = [17, 49, 42, 18, 58, 3, 27, 44]
 MODEL = os.environ.get("REFINE_MODEL", "xyn-ai/anything-v4.0")  # colored-anime SD1.5
 TILE = "lllyasviel/control_v11f1e_sd15_tile"
-STRENGTHS = [0.25, 0.40, 0.55]
-CTX, WORK, STEPS, GUID, CN = 256, 768, 24, 6.0, 1.1
+STRENGTHS = [float(x) for x in os.environ.get("STRENGTHS", "0.25,0.40,0.55").split(",")]
+CTX, WORK, STEPS = 256, 768, int(os.environ.get("STEPS", "24"))
+GUID = float(os.environ.get("GUID", "6.0"))
+CN = float(os.environ.get("CN", "1.1"))
+TAG = os.environ.get("TAG", "R1")
 HULL = 22
 PROMPT = ("detailed manga webtoon panel, sharp clean linework, crisp painted background, "
           "high quality, consistent shading")
@@ -50,7 +53,7 @@ def main():
     from PIL import Image
     from diffusers import (StableDiffusionControlNetImg2ImgPipeline, ControlNetModel,
                            UniPCMultistepScheduler)
-    notify(f"R1 SETUP torch {torch.__version__} cuda={torch.cuda.is_available()} model={MODEL}")
+    notify(f"{TAG} SETUP torch {torch.__version__} cuda={torch.cuda.is_available()} model={MODEL}")
     cn = ControlNetModel.from_pretrained(TILE, torch_dtype=torch.float16)
     pipe = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
         MODEL, controlnet=cn, torch_dtype=torch.float16, safety_checker=None, requires_safety_checker=False)
@@ -109,14 +112,14 @@ def main():
         cols = [lbl(orig[by0:by1, bx0:bx1], "ORIG"), sep, lbl(lama[by0:by1, bx0:bx1], "LaMa")]
         for s in STRENGTHS:
             cols += [sep, lbl(outs[s][by0:by1, bx0:bx1], f"refine s{s}")]
-        p = f"/content/r1_{idx:03d}.png"; cv2.imwrite(p, np.hstack(cols))
-        notify(f"R1 scene_{idx:03d} {time.time()-t0:.0f}s -> {upload(p)}")
+        p = f"/content/{TAG.lower()}_{idx:03d}.png"; cv2.imwrite(p, np.hstack(cols))
+        notify(f"{TAG} scene_{idx:03d} {time.time()-t0:.0f}s -> {upload(p)}")
         print(f"scene_{idx:03d} done", flush=True)
-    notify("R1 ALL DONE")
+    notify(f"{TAG} ALL DONE")
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception:
-        notify("R1 ERROR\n" + traceback.format_exc()); raise
+        notify(f"{TAG} ERROR\n" + traceback.format_exc()); raise
