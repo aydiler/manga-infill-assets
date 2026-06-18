@@ -72,7 +72,10 @@ def main():
     from PIL import Image
     from diffusers import AutoPipelineForInpainting
     notify(f"{TAG} SETUP torch {torch.__version__} cuda={torch.cuda.is_available()} model={MODEL}")
-    pipe = AutoPipelineForInpainting.from_pretrained(MODEL, torch_dtype=torch.float16, variant="fp16")
+    try:
+        pipe = AutoPipelineForInpainting.from_pretrained(MODEL, torch_dtype=torch.float16, variant="fp16")
+    except Exception:
+        pipe = AutoPipelineForInpainting.from_pretrained(MODEL, torch_dtype=torch.float16)
     pipe.enable_model_cpu_offload()          # T4-safe (SDXL won't fully fit 16GB otherwise)
     try: pipe.enable_xformers_memory_efficient_attention()
     except Exception: pass
