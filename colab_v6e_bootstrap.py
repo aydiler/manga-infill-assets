@@ -34,6 +34,7 @@ import json, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TOKEN = secrets.token_hex(8)
 G = {"__name__": "colab", "jax": jax}            # persistent experiment namespace
+G["G"] = G                                       # self-ref so exec'd code can use `G[...]` for resident state
 
 
 class H(BaseHTTPRequestHandler):
