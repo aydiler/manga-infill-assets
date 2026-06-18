@@ -20,8 +20,7 @@ print("[1/5] Verifying TPU is visible to JAX ...", flush=True)
 import jax
 print("      jax", jax.__version__, "devices:", jax.devices(), flush=True)
 
-print("[2/5] Installing flask + cloudflared ...", flush=True)
-subprocess.run([sys.executable, "-m", "pip", "-q", "install", "flask"], check=False)
+print("[2/5] Installing cloudflared ...", flush=True)
 CF = "/usr/local/bin/cloudflared"
 if not os.path.exists(CF):
     arch = "arm64" if platform.machine() in ("aarch64", "arm64") else "amd64"
@@ -30,53 +29,70 @@ if not os.path.exists(CF):
         f"cloudflared-linux-{arch} -O {CF} && chmod +x {CF}", shell=True, check=True)
 print("      cloudflared ready:", os.path.exists(CF), flush=True)
 
-print("[3/5] Starting exec server on :8000 ...", flush=True)
-from flask import Flask, request, jsonify, send_file
+print("[3/5] Starting stdlib exec server on :8000 ...", flush=True)
+import json, urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TOKEN = secrets.token_hex(8)
 G = {"__name__": "colab", "jax": jax}            # persistent experiment namespace
-app = Flask(__name__)
 
 
-def _auth():
-    return request.headers.get("X-Token") == TOKEN
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):                   # silence per-request logging
+        pass
+
+    def _auth(self):
+        return self.headers.get("X-Token") == TOKEN
+
+    def _send(self, code, body, ctype="application/json"):
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body).encode()
+        elif isinstance(body, str):
+            body = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path)
+        if not self._auth():
+            return self._send(403, {"error": "auth"})
+        if u.path == "/ping":
+            return self._send(200, {"ok": True, "devices": str(jax.devices())})
+        if u.path == "/get":
+            p = urllib.parse.parse_qs(u.query).get("path", [""])[0]
+            try:
+                with open(p, "rb") as f:
+                    return self._send(200, f.read(), "application/octet-stream")
+            except Exception as e:
+                return self._send(404, {"error": str(e)})
+        return self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        if not self._auth():
+            return self._send(403, {"error": "auth"})
+        ln = int(self.headers.get("Content-Length", "0"))
+        code = json.loads(self.rfile.read(ln))["code"]
+        buf = io.StringIO()
+        err = None
+        t0 = time.time()
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                exec(code, G)
+        except Exception:
+            err = traceback.format_exc()
+            buf.write(err)
+        arts = G.pop("RESULT", None) or []
+        if isinstance(arts, str):
+            arts = [arts]
+        return self._send(200, {"stdout": buf.getvalue(), "error": err,
+                                "artifacts": arts, "secs": round(time.time() - t0, 1)})
 
 
-@app.post("/exec")
-def _exec():
-    if not _auth():
-        return jsonify(error="auth"), 403
-    code = request.get_json(force=True)["code"]
-    buf = io.StringIO()
-    err = None
-    t0 = time.time()
-    try:
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            exec(code, G)
-    except Exception:
-        err = traceback.format_exc()
-        buf.write(err)
-    arts = G.pop("RESULT", None) or []
-    if isinstance(arts, str):
-        arts = [arts]
-    return jsonify(stdout=buf.getvalue(), error=err, artifacts=arts, secs=round(time.time() - t0, 1))
-
-
-@app.get("/get")
-def _get():
-    if not _auth():
-        return "auth", 403
-    return send_file(request.args["path"])
-
-
-@app.get("/ping")
-def _ping():
-    if not _auth():
-        return "auth", 403
-    return jsonify(ok=True, devices=str(jax.devices()))
-
-
-threading.Thread(target=lambda: app.run(host="0.0.0.0", port=8000, threaded=True), daemon=True).start()
-time.sleep(2)
+srv = ThreadingHTTPServer(("0.0.0.0", 8000), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+time.sleep(1)
 
 print("[4/5] Opening cloudflared quick tunnel ...", flush=True)
 proc = subprocess.Popen([CF, "tunnel", "--url", "http://localhost:8000", "--no-autoupdate"],
