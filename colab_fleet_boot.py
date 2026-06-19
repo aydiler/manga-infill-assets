@@ -195,12 +195,17 @@ def announce(url):
 
 
 def start_tunnel():
-    cf = "/usr/local/bin/cloudflared"
+    import shutil
+    cf = shutil.which("cloudflared") or "/usr/local/bin/cloudflared"
     if not os.path.exists(cf):
         arch = "arm64" if platform.machine() in ("aarch64", "arm64") else "amd64"
+        dst = cf if os.access(os.path.dirname(cf) or "/", os.W_OK) else \
+            os.path.expanduser("~/.local/bin/cloudflared")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
         subprocess.run("wget -q https://github.com/cloudflare/cloudflared/releases/latest/"
-                       f"download/cloudflared-linux-{arch} -O {cf} && chmod +x {cf}",
+                       f"download/cloudflared-linux-{arch} -O {dst} && chmod +x {dst}",
                        shell=True, check=True)
+        cf = dst
     proc = subprocess.Popen([cf, "tunnel", "--url", f"http://localhost:{PORT}", "--no-autoupdate"],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     url = None
