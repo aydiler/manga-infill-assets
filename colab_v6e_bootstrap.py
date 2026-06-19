@@ -121,3 +121,10 @@ try:
     print("      posted url+token to ntfy topic manga-v6e-rpc-7x2", flush=True)
 except Exception as e:
     print("      ntfy post failed:", e, flush=True)
+
+# KEEP-ALIVE: hold this cell open forever. An actively-running cell registers as Colab activity, so
+# the runtime won't idle-disconnect (background-thread RPC alone does NOT count as activity). The HTTP
+# server + cloudflared run in their own threads; all work is driven via the tunnel, not via cells.
+print("[keepalive] cell held open to keep the runtime active; drive everything via the tunnel.", flush=True)
+while True:
+    time.sleep(60)
