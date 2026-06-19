@@ -16,7 +16,10 @@ Design notes:
 """
 import os, sys, io, re, time, json, secrets, threading, platform, subprocess, contextlib, traceback
 
-print("[1/5] Verifying TPU is visible to JAX ...", flush=True)
+print("[1/5] Verifying accelerator is visible to JAX ...", flush=True)
+# GPU runtimes: stop jax preallocating 75% of VRAM up front (starves big models like SD3+T5-XXL);
+# on-demand allocation lets a ~12GB model + render fit a 24GB card. No-op on TPU.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 import jax
 print("      jax", jax.__version__, "devices:", jax.devices(), flush=True)
 
