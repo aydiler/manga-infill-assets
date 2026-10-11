@@ -266,13 +266,15 @@ def main():
     time.sleep(0.5)
 
     if EXPOSE == "tunnel":
-        url, _proc = start_tunnel()
+        url, proc = start_tunnel()
     elif EXPOSE == "tailscale":
+        proc = None
         url = _expose_url("tailscale")
         if not url:
             raise SystemExit("FLEET_EXPOSE=tailscale but no FLEET_TS_URL set and `tailscale` CLI "
                              "unavailable — cannot derive a stable url")
     else:
+        proc = None
         url = _expose_url(EXPOSE)
 
     print("[fleet] name=%s expose=%s url=%s token=%s device=%s"
@@ -280,10 +282,19 @@ def main():
     announce(url)
     print("[fleet] announced to %s/%s and %s/%s.json" % (NTFY, TOPIC, ANNOUNCE_DIR, NAME), flush=True)
 
-    # heartbeat: re-announce (keeps last_seen fresh, restarts the tunnel if it died) AND
-    # keeps this foreground loop running = Colab "activity" so the runtime won't idle-disconnect.
+    # heartbeat: re-announce (keeps last_seen fresh), RESTART the tunnel if the cloudflared
+    # subprocess died (quick tunnels die randomly; the old worker left a live-but-unreachable
+    # url in the registry — seen on kaggle1 2026-10-11), and keeps this foreground loop
+    # running = Colab "activity" so the runtime won't idle-disconnect.
     while True:
         time.sleep(30)
+        if proc is not None and proc.poll() is not None:
+            print(f"[fleet] cloudflared died (rc={proc.returncode}) — restarting tunnel", flush=True)
+            try:
+                url, proc = start_tunnel()
+                print(f"[fleet] new url: {url}", flush=True)
+            except Exception as e:
+                print(f"[fleet] tunnel restart failed: {e}", flush=True)
         announce(url)
 
 
