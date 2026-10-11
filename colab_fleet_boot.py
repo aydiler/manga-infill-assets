@@ -1,8 +1,10 @@
 """colab_fleet_boot.py — the ONE universal worker. Same file runs identically on:
 
-  * Colab     (FLEET_EXPOSE=tunnel  -> opens a free cloudflared quick tunnel)
-  * any host  (FLEET_EXPOSE=host    -> binds 0.0.0.0, announces FLEET_HOST ip — e.g. a Tailscale IP)
-  * localhost (FLEET_EXPOSE=local   -> binds 127.0.0.1, announces it — for same-machine fleet tests)
+  * Colab     (FLEET_EXPOSE=tunnel    -> opens a free cloudflared quick tunnel)
+  * Colab/TS  (FLEET_EXPOSE=tailscale -> stable MagicDNS url via `tailscale serve`; survives restarts —
+               no rotating url / NXDOMAIN / 530 like quick tunnels. Set FLEET_TS_URL to skip discovery.)
+  * any host  (FLEET_EXPOSE=host      -> binds 0.0.0.0, announces FLEET_HOST ip — e.g. a Tailscale IP)
+  * localhost (FLEET_EXPOSE=local     -> binds 127.0.0.1, announces it — for same-machine fleet tests)
 
 It is a persistent-namespace exec server (HTTP) that DIALS HOME: it announces its
 {name,url,token,device} to an ntfy topic AND drops ~/.colab/announce/<name>.json, so the
@@ -20,13 +22,14 @@ Endpoints (all gated by the X-Token header):
   GET  /get?path=         -> raw bytes                             stream an artifact back
 
 Config via env (all optional):
-  FLEET_NAME   instance name           (default: hostname)
-  FLEET_EXPOSE tunnel|host|local       (default: local)
-  FLEET_HOST   ip to announce for host (default: auto-detected)
-  FLEET_PORT   bind port               (default: 8077)
-  FLEET_TOKEN  fixed auth token        (default: random)
-  FLEET_TOPIC  ntfy announce topic     (default: colab-fleet-ahmet-9z3)
-  FLEET_NTFY   ntfy base url           (default: https://ntfy.sh)
+  FLEET_NAME   instance name              (default: hostname)
+  FLEET_EXPOSE tunnel|tailscale|host|local (default: local)
+  FLEET_HOST   ip to announce for host    (default: auto-detected)
+  FLEET_TS_URL stable url for tailscale    (default: derived from `tailscale serve` + MagicDNS)
+  FLEET_PORT   bind port                  (default: 8077)
+  FLEET_TOKEN  fixed auth token           (default: random)
+  FLEET_TOPIC  ntfy announce topic        (default: colab-fleet-ahmet-9z3)
+  FLEET_NTFY   ntfy base url              (default: https://ntfy.sh)
 """
 import os, io, re, json, time, socket, secrets, threading, platform, subprocess, contextlib, traceback
 import urllib.request
@@ -190,8 +193,14 @@ def announce(url):
         req = urllib.request.Request(NTFY + "/" + TOPIC, data=body,
                                      headers={"Title": "fleet-announce", "Tags": NAME})
         urllib.request.urlopen(req, timeout=10).read()
+        announce._n = 0
     except Exception as e:
-        print("[announce] ntfy failed:", e, flush=True)
+        # bounded printing: Colab IPs stay ntfy-429'd for hours, and one print per
+        # 30s heartbeat = thousands of saved notebook lines, which wedges the tab
+        # renderer on slow machines when the notebook reloads (seen 2026-10-11).
+        announce._n = getattr(announce, "_n", 0) + 1
+        if announce._n <= 1 or announce._n % 100 == 0:
+            print(f"[announce] ntfy failed ({announce._n}x):", e, flush=True)
 
 
 def start_tunnel():
@@ -217,6 +226,39 @@ def start_tunnel():
     return url, proc
 
 
+def _tailscale_url():
+    """Stable MagicDNS url for the worker — survives PC/runtime restarts (unlike a cloudflared
+    quick tunnel's rotating, NXDOMAIN-prone hostname). FLEET_TS_URL wins (explicit override / skips
+    discovery). Else `tailscale serve` the local port over HTTPS and read Self.DNSName from
+    `tailscale status --json`. Returns None when neither is available (no FLEET_TS_URL and no
+    usable `tailscale` CLI) so main() can fail with a clear message."""
+    env = os.environ.get("FLEET_TS_URL")
+    if env:
+        return env.rstrip("/")
+    import shutil
+    if not shutil.which("tailscale"):
+        return None
+    try:
+        subprocess.run(["tailscale", "serve", "--bg", "--https=443", f"http://localhost:{PORT}"],
+                       check=False, capture_output=True, text=True, timeout=20)
+        st = json.loads(subprocess.run(["tailscale", "status", "--json"],
+                                       capture_output=True, text=True, timeout=15).stdout or "{}")
+        dns = ((st.get("Self") or {}).get("DNSName") or "").rstrip(".")
+        return f"https://{dns}" if dns else None
+    except Exception:
+        return None
+
+
+def _expose_url(expose):
+    """Compute the announce URL for a NON-tunnel expose mode WITHOUT binding the HTTP server (pure
+    enough to unit-test). 'tunnel' is excluded — it needs a live cloudflared subprocess (main())."""
+    if expose == "tailscale":
+        return _tailscale_url()
+    if expose == "host":
+        return "http://%s:%d" % (os.environ.get("FLEET_HOST") or _lan_ip(), PORT)
+    return "http://127.0.0.1:%d" % PORT          # local
+
+
 def main():
     bind = "127.0.0.1" if EXPOSE == "local" else "0.0.0.0"
     srv = ThreadingHTTPServer((bind, PORT), H)
@@ -225,10 +267,13 @@ def main():
 
     if EXPOSE == "tunnel":
         url, _proc = start_tunnel()
-    elif EXPOSE == "host":
-        url = "http://%s:%d" % (os.environ.get("FLEET_HOST") or _lan_ip(), PORT)
+    elif EXPOSE == "tailscale":
+        url = _expose_url("tailscale")
+        if not url:
+            raise SystemExit("FLEET_EXPOSE=tailscale but no FLEET_TS_URL set and `tailscale` CLI "
+                             "unavailable — cannot derive a stable url")
     else:
-        url = "http://127.0.0.1:%d" % PORT
+        url = _expose_url(EXPOSE)
 
     print("[fleet] name=%s expose=%s url=%s token=%s device=%s"
           % (NAME, EXPOSE, url, TOKEN, DEVICE.get("accel")), flush=True)
