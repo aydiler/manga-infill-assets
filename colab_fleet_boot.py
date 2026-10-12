@@ -188,7 +188,11 @@ def announce(url):
         os.replace(tmp, os.path.join(ANNOUNCE_DIR, NAME + ".json"))
     except Exception:
         pass
-    # 2) ntfy announce (cross-network discovery)
+    # 2) ntfy announce (cross-network discovery) — SKIP when FLEET_NTFY=off
+    #    (Colab IPs get ntfy-429'd for hours anyway; the autobot reads the URL
+    #    from the notebook DOM, so ntfy is pure noise there.)
+    if NTFY in ("off", "none", "disabled", ""):
+        return
     try:
         req = urllib.request.Request(NTFY + "/" + TOPIC, data=body,
                                      headers={"Title": "fleet-announce", "Tags": NAME})
