@@ -63,7 +63,8 @@ def detect_device():
             pass
     d.setdefault("accel", "cpu"); d.setdefault("kind", "cpu")
     try:
-        d["env"] = "colab" if os.path.exists("/content") else "host"
+        d["env"] = ("kaggle" if os.path.exists("/kaggle") else
+                    "colab" if os.path.exists("/content") else "host")
     except Exception:
         pass
     return d
@@ -98,7 +99,9 @@ def _run_bg(job, code):
                 exec(code, G)
             arts = G.pop("RESULT", None) or []
             G["_jobs"][job]["artifacts"] = [arts] if isinstance(arts, str) else list(arts)
-        except Exception:
+        except BaseException:
+            # BaseException, not Exception: sys.exit()/SystemExit in a fleet job
+            # used to vanish here, leaving the job "running" forever (wedged).
             tb = traceback.format_exc(); G["_jobs"][job]["err"] = tb; log.write(tb)
         G["_jobs"][job]["secs"] = round(time.time() - t0, 1)
         G["_jobs"][job]["done"] = True
